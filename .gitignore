@@ -3,3 +3,16 @@ dist/
 *.tgz
 .env
 config.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.secrets
+.claude-to-im/
+data/
+logs/
+runtime/
