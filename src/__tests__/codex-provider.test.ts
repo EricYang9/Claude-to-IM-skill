@@ -331,6 +331,56 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('enables network access for Codex SDK by default', async () => {
+    const { CodexProvider } = await import('../codex-provider.js');
+    const { PendingPermissions } = await import('../permission-gateway.js');
+    const provider = new CodexProvider(new PendingPermissions());
+
+    let capturedOptions: Record<string, unknown> | undefined;
+    (provider as any).sdk = {
+      Codex: class {
+        constructor(opts: Record<string, unknown>) {
+          capturedOptions = opts;
+        }
+      },
+    };
+
+    await (provider as any).ensureSDK();
+
+    assert.deepEqual(capturedOptions?.config, {
+      sandbox_workspace_write: { network_access: true },
+    });
+  });
+
+  it('allows disabling Codex network access explicitly', async () => {
+    const old = process.env.CTI_CODEX_NETWORK_ACCESS;
+    process.env.CTI_CODEX_NETWORK_ACCESS = 'false';
+    try {
+      const { CodexProvider } = await import('../codex-provider.js');
+      const { PendingPermissions } = await import('../permission-gateway.js');
+      const provider = new CodexProvider(new PendingPermissions());
+
+      let capturedOptions: Record<string, unknown> | undefined;
+      (provider as any).sdk = {
+        Codex: class {
+          constructor(opts: Record<string, unknown>) {
+            capturedOptions = opts;
+          }
+        },
+      };
+
+      await (provider as any).ensureSDK();
+
+      assert.ok(!capturedOptions || !Object.prototype.hasOwnProperty.call(capturedOptions, 'config'));
+    } finally {
+      if (old === undefined) {
+        delete process.env.CTI_CODEX_NETWORK_ACCESS;
+      } else {
+        process.env.CTI_CODEX_NETWORK_ACCESS = old;
+      }
+    }
+  });
+
   it('retries with fresh thread when resume fails before any events', async () => {
     const { CodexProvider } = await import('../codex-provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');

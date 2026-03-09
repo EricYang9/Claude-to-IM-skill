@@ -55,6 +55,10 @@ function shouldPassModelToCodex(): boolean {
   return process.env.CTI_CODEX_PASS_MODEL === 'true';
 }
 
+function shouldEnableCodexNetworkAccess(): boolean {
+  return process.env.CTI_CODEX_NETWORK_ACCESS !== 'false';
+}
+
 function looksLikeClaudeModel(model?: string): boolean {
   return !!model && /^claude[-_]/i.test(model);
 }
@@ -100,11 +104,17 @@ export class CodexProvider implements LLMProvider {
       || process.env.OPENAI_API_KEY
       || undefined;
     const baseUrl = process.env.CTI_CODEX_BASE_URL || undefined;
+    const networkAccess = shouldEnableCodexNetworkAccess();
 
     const CodexClass = this.sdk.Codex;
     this.codex = new CodexClass({
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
+      ...(networkAccess ? {
+        config: {
+          sandbox_workspace_write: { network_access: true },
+        },
+      } : {}),
     });
 
     return { sdk: this.sdk, codex: this.codex };
