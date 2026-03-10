@@ -245,15 +245,12 @@ describe('CodexProvider', () => {
     assert.equal(chunks.length, 0);
   });
 
-  it('does not pass model by default and skips stale Claude resume id', async () => {
+  it('does not pass model by default and keeps the provided resume id', async () => {
     const { CodexProvider } = await import('../codex-provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
     let resumeCalls = 0;
-    let startCalls = 0;
-    let capturedStartOptions: Record<string, unknown> | undefined;
-
     const mockThread = {
       runStreamed: () => ({
         events: (async function* () {
@@ -268,10 +265,8 @@ describe('CodexProvider', () => {
         resumeCalls += 1;
         return mockThread;
       },
-      startThread: (opts: Record<string, unknown>) => {
-        startCalls += 1;
-        capturedStartOptions = opts;
-        return mockThread;
+      startThread: () => {
+        throw new Error('startThread should not be called');
       },
     };
 
@@ -284,10 +279,7 @@ describe('CodexProvider', () => {
 
     await collectStream(stream);
 
-    assert.equal(resumeCalls, 0, 'Should skip resume for stale Claude-model session in Codex runtime');
-    assert.equal(startCalls, 1, 'Should start a fresh Codex thread');
-    assert.ok(capturedStartOptions, 'startThread options should be captured');
-    assert.ok(!Object.prototype.hasOwnProperty.call(capturedStartOptions!, 'model'), 'Model should not be forwarded by default');
+    assert.equal(resumeCalls, 1, 'Should continue using the provided sdkSessionId');
   });
 
   it('passes model only when CTI_CODEX_PASS_MODEL=true', async () => {
@@ -332,24 +324,34 @@ describe('CodexProvider', () => {
   });
 
   it('enables network access for Codex SDK by default', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
-    const { PendingPermissions } = await import('../permission-gateway.js');
-    const provider = new CodexProvider(new PendingPermissions());
+    const old = process.env.CTI_CODEX_NETWORK_ACCESS;
+    process.env.CTI_CODEX_NETWORK_ACCESS = 'true';
+    try {
+      const { CodexProvider } = await import('../codex-provider.js');
+      const { PendingPermissions } = await import('../permission-gateway.js');
+      const provider = new CodexProvider(new PendingPermissions());
 
-    let capturedOptions: Record<string, unknown> | undefined;
-    (provider as any).sdk = {
-      Codex: class {
-        constructor(opts: Record<string, unknown>) {
-          capturedOptions = opts;
-        }
-      },
-    };
+      let capturedOptions: Record<string, unknown> | undefined;
+      (provider as any).sdk = {
+        Codex: class {
+          constructor(opts: Record<string, unknown>) {
+            capturedOptions = opts;
+          }
+        },
+      };
 
-    await (provider as any).ensureSDK();
+      await (provider as any).ensureSDK();
 
-    assert.deepEqual(capturedOptions?.config, {
-      sandbox_workspace_write: { network_access: true },
-    });
+      assert.deepEqual(capturedOptions?.config, {
+        sandbox_workspace_write: { network_access: true },
+      });
+    } finally {
+      if (old === undefined) {
+        delete process.env.CTI_CODEX_NETWORK_ACCESS;
+      } else {
+        process.env.CTI_CODEX_NETWORK_ACCESS = old;
+      }
+    }
   });
 
   it('allows disabling Codex network access explicitly', async () => {
@@ -381,7 +383,7 @@ describe('CodexProvider', () => {
     }
   });
 
-  it('retries with fresh thread when resume fails before any events', async () => {
+  it('surfaces an error when resume fails before any events', async () => {
     const { CodexProvider } = await import('../codex-provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
@@ -393,14 +395,6 @@ describe('CodexProvider', () => {
         throw new Error('resuming session with different model');
       },
     };
-    const freshThread = {
-      runStreamed: () => ({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 3, cached_input_tokens: 0 } };
-        })(),
-      }),
-    };
-
     (provider as any).sdk = { Codex: class { constructor() {} } };
     (provider as any).codex = {
       resumeThread: () => {
@@ -409,7 +403,7 @@ describe('CodexProvider', () => {
       },
       startThread: () => {
         startCalls += 1;
-        return freshThread;
+        throw new Error('startThread should not be called');
       },
     };
 
@@ -426,9 +420,9 @@ describe('CodexProvider', () => {
     const resultEvent = events.find(e => e.type === 'result');
 
     assert.equal(resumeCalls, 1, 'Should attempt resume once');
-    assert.equal(startCalls, 1, 'Should fall back to a fresh thread');
-    assert.ok(!errorEvent, 'Retry success should not emit error');
-    assert.ok(resultEvent, 'Retry success should emit result');
+    assert.equal(startCalls, 0, 'Should not fall back to a fresh thread');
+    assert.ok(errorEvent, 'Resume failure should surface as an error');
+    assert.ok(!resultEvent, 'Resume failure should not emit a success result');
   });
 });
 
