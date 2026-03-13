@@ -32,29 +32,181 @@ else
   check "Node.js installed" 1
 fi
 
+# --- Helper: read a value from config.env ---
+get_config() { grep "^$1=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//'; }
+
 # --- Read runtime setting ---
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CTI_RUNTIME=$(grep "^CTI_RUNTIME=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "'" | tr -d '"')
+CTI_RUNTIME=$(get_config CTI_RUNTIME)
 CTI_RUNTIME="${CTI_RUNTIME:-claude}"
 echo "Runtime: $CTI_RUNTIME"
 echo ""
 
 # --- Claude CLI available (claude/auto modes) ---
 if [ "$CTI_RUNTIME" = "claude" ] || [ "$CTI_RUNTIME" = "auto" ]; then
-  if command -v claude &>/dev/null; then
-    CLAUDE_VER=$(claude --version 2>/dev/null || echo "unknown")
-    check "Claude CLI available (${CLAUDE_VER})" 0
+  # Resolve CLI path matching the daemon's checkCliCompatibility logic:
+  #   - Version >= 2.x AND all required flags present
+  #   - Skip candidates that fail either check (same as resolveClaudeCliPath)
+  CLAUDE_PATH=""
+  CLAUDE_VER=""
+  CLAUDE_COMPAT=1
+  REQUIRED_FLAGS="output-format input-format permission-mode setting-sources"
+
+  # Helper: check if a candidate passes both version and flags checks.
+  # Sets CLAUDE_PATH/CLAUDE_VER/CLAUDE_COMPAT on success.
+  try_candidate() {
+    local cand="$1"
+    [ -x "$cand" ] || return 1
+    local ver
+    ver=$("$cand" --version 2>/dev/null || true)
+    [ -z "$ver" ] && return 1
+    local major
+    major=$(echo "$ver" | sed -E -n 's/^[^0-9]*([0-9]+)\..*/\1/p' | head -1)
+    if [ -z "$major" ] || ! [ "$major" -ge 2 ] 2>/dev/null; then
+      echo "  (skipping $cand — version $ver is too old, need >= 2.x)"
+      return 1
+    fi
+    # Version OK — check flags
+    local help_text
+    help_text=$("$cand" --help 2>&1 || true)
+    for flag in $REQUIRED_FLAGS; do
+      if ! echo "$help_text" | grep -q "$flag"; then
+        echo "  (skipping $cand — version $ver OK but missing --$flag)"
+        return 1
+      fi
+    done
+    # Fully compatible
+    CLAUDE_PATH="$cand"
+    CLAUDE_VER="$ver"
+    CLAUDE_COMPAT=0
+    return 0
+  }
+
+  # 1. Explicit env var — if set, daemon uses it unconditionally (no fallback).
+  #    Doctor must mirror this: report on this path only, never scan further.
+  CTI_EXE=$(get_config CTI_CLAUDE_CODE_EXECUTABLE 2>/dev/null || true)
+  if [ -n "$CTI_EXE" ]; then
+    if [ -x "$CTI_EXE" ]; then
+      if ! try_candidate "$CTI_EXE"; then
+        # Explicit path is set but incompatible — daemon WILL use it and fail.
+        # Report it as the selected CLI so the user sees the real problem.
+        CLAUDE_PATH="$CTI_EXE"
+        CLAUDE_VER=$("$CTI_EXE" --version 2>/dev/null || echo "unknown")
+        # CLAUDE_COMPAT stays 1 (incompatible) — checks below will report failure
+      fi
+    else
+      CLAUDE_PATH="$CTI_EXE"
+      CLAUDE_VER="(not executable)"
+    fi
+  fi
+
+  # 2. All PATH candidates (only if no explicit env var was set)
+  if [ -z "$CTI_EXE" ] && [ -z "$CLAUDE_PATH" ]; then
+    ALL_CLAUDES=$(which -a claude 2>/dev/null || true)
+    for cand in $ALL_CLAUDES; do
+      try_candidate "$cand" && break
+    done
+  fi
+
+  # 3. Well-known locations (only if no explicit env var was set)
+  if [ -z "$CTI_EXE" ] && [ -z "$CLAUDE_PATH" ]; then
+    for cand in \
+      "$HOME/.claude/local/claude" \
+      "$HOME/.local/bin/claude" \
+      "/usr/local/bin/claude" \
+      "/opt/homebrew/bin/claude" \
+      "$HOME/.npm-global/bin/claude"; do
+      try_candidate "$cand" && break
+    done
+  fi
+
+  if [ -n "$CLAUDE_PATH" ] && [ "$CLAUDE_COMPAT" = "0" ]; then
+    check "Claude CLI compatible (${CLAUDE_VER} at ${CLAUDE_PATH})" 0
+  elif [ -n "$CLAUDE_PATH" ]; then
+    # Path found but incompatible (too old, missing flags, or not executable)
+    check "Claude CLI compatible (${CLAUDE_VER} at ${CLAUDE_PATH} — incompatible, see above)" 1
   else
     if [ "$CTI_RUNTIME" = "claude" ]; then
-      check "Claude CLI available (not found in PATH)" 1
+      check "Claude CLI available (not found in PATH or common locations)" 1
     else
       check "Claude CLI available (not found — will use Codex fallback)" 0
     fi
   fi
 
+  # --- Claude CLI authenticated ---
+  # Skip this check if third-party API credentials are configured in config.env.
+  # In that mode the bridge authenticates via ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN,
+  # not via `claude auth login`, so a missing interactive login is expected and harmless.
+  HAS_THIRD_PARTY_AUTH=false
+  if [ -f "$CONFIG_FILE" ] && grep -qE "^ANTHROPIC_(API_KEY|AUTH_TOKEN)=" "$CONFIG_FILE" 2>/dev/null; then
+    HAS_THIRD_PARTY_AUTH=true
+  fi
+  if [ -n "$CLAUDE_PATH" ] && [ "$CLAUDE_COMPAT" = "0" ]; then
+    if [ "$HAS_THIRD_PARTY_AUTH" = "true" ]; then
+      check "Claude CLI auth (skipped — using third-party API credentials from config.env)" 0
+    else
+      AUTH_OUT=$("$CLAUDE_PATH" auth status 2>&1 || true)
+      if echo "$AUTH_OUT" | grep -qiE 'loggedIn.*true|logged.in'; then
+        check "Claude CLI authenticated" 0
+      else
+        check "Claude CLI authenticated (run 'claude auth login')" 1
+      fi
+    fi
+  fi
+
+  # --- ANTHROPIC_* env reachability ---
+  # Check whether ANTHROPIC_* vars are configured in config.env.
+  # This is what matters for the daemon — the current shell env is irrelevant
+  # because on macOS the daemon runs under launchd with only plist env vars.
+  HAS_ANTHROPIC_CONFIG=false
+  if [ -f "$CONFIG_FILE" ]; then
+    if grep -q "^ANTHROPIC_" "$CONFIG_FILE" 2>/dev/null; then
+      HAS_ANTHROPIC_CONFIG=true
+    fi
+  fi
+  if [ "$HAS_ANTHROPIC_CONFIG" = "true" ]; then
+    check "ANTHROPIC_* vars in config.env (third-party API provider)" 0
+
+    PLIST_FILE="$HOME/Library/LaunchAgents/com.claude-to-im.bridge.plist"
+
+    # On macOS, verify the launchd plist also has the vars
+    if [ "$(uname -s)" = "Darwin" ] && [ -f "$PLIST_FILE" ]; then
+      if grep -q "ANTHROPIC_" "$PLIST_FILE" 2>/dev/null; then
+        check "ANTHROPIC_* vars in launchd plist" 0
+      else
+        check "ANTHROPIC_* vars in launchd plist (NOT present — restart bridge to regenerate plist)" 1
+      fi
+    fi
+
+    # If bridge is running, verify the LIVE process has the vars.
+    # The plist may be correct on disk but if the daemon hasn't been
+    # restarted since the plist was regenerated, it still runs with the
+    # old environment.
+    BRIDGE_PID=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
+      # ps eww shows the process environment on macOS/Linux
+      PROC_ENV=$(ps eww -p "$BRIDGE_PID" 2>/dev/null || true)
+      if echo "$PROC_ENV" | grep -q "ANTHROPIC_"; then
+        check "Running bridge process has ANTHROPIC_* env vars" 0
+      else
+        check "Running bridge process has ANTHROPIC_* env vars (NOT in process env — restart the bridge)" 1
+      fi
+    fi
+  else
+    check "ANTHROPIC_* vars in config.env (not set — OK if using default Anthropic auth)" 0
+  fi
+
   # --- SDK cli.js resolvable ---
-  SDK_CLI="$SKILL_DIR/node_modules/@anthropic-ai/claude-agent-sdk/dist/cli.js"
-  if [ -f "$SDK_CLI" ]; then
+  SDK_CLI=""
+  for candidate in \
+    "$SKILL_DIR/node_modules/@anthropic-ai/claude-agent-sdk/cli.js" \
+    "$SKILL_DIR/node_modules/@anthropic-ai/claude-agent-sdk/dist/cli.js"; do
+    if [ -f "$candidate" ]; then
+      SDK_CLI="$candidate"
+      break
+    fi
+  done
+  if [ -n "$SDK_CLI" ]; then
     check "Claude SDK cli.js exists ($SDK_CLI)" 0
   else
     if [ "$CTI_RUNTIME" = "claude" ]; then
@@ -143,8 +295,6 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 # --- Load config for channel checks ---
-get_config() { grep "^$1=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//'; }
-
 if [ -f "$CONFIG_FILE" ]; then
   CTI_CHANNELS=$(get_config CTI_ENABLED_CHANNELS)
 

@@ -44,13 +44,13 @@ build_env_dict() {
   esac
   case "$runtime" in
     claude|auto)
-      if [ "${CTI_ANTHROPIC_PASSTHROUGH:-}" = "true" ]; then
-        for var in ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN; do
-          local val="${!var:-}"
-          [ -z "$val" ] && continue
-          dict+="${indent}<key>${var}</key>\n${indent}<string>${val}</string>\n"
-        done
-      fi
+      # Auto-forward all ANTHROPIC_* env vars (sourced from config.env by daemon.sh).
+      # Third-party API providers need these to reach the CLI subprocess.
+      while IFS='=' read -r name val; do
+        case "$name" in ANTHROPIC_*)
+          dict+="${indent}<key>${name}</key>\n${indent}<string>${val}</string>\n"
+          ;; esac
+      done < <(env)
       ;;
   esac
 

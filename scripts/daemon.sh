@@ -15,10 +15,20 @@ ensure_built() {
   if [ ! -f "$SKILL_DIR/dist/daemon.mjs" ]; then
     need_build=1
   else
+    # Check if any source file is newer than the bundle
     local newest_src
     newest_src=$(find "$SKILL_DIR/src" -name '*.ts' -newer "$SKILL_DIR/dist/daemon.mjs" 2>/dev/null | head -1)
     if [ -n "$newest_src" ]; then
       need_build=1
+    fi
+    # Also check if node_modules/claude-to-im was updated (npm update)
+    # — its code is bundled into dist, so changes require a rebuild
+    if [ "$need_build" = "0" ] && [ -d "$SKILL_DIR/node_modules/claude-to-im/src" ]; then
+      local newest_dep
+      newest_dep=$(find "$SKILL_DIR/node_modules/claude-to-im/src" -name '*.ts' -newer "$SKILL_DIR/dist/daemon.mjs" 2>/dev/null | head -1)
+      if [ -n "$newest_dep" ]; then
+        need_build=1
+      fi
     fi
   fi
   if [ "$need_build" = "1" ]; then
@@ -35,7 +45,7 @@ clean_env() {
   runtime=$(grep "^CTI_RUNTIME=" "$CTI_HOME/config.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "'" | tr -d '"' || true)
   runtime="${runtime:-claude}"
 
-  local mode="${CTI_ENV_ISOLATION:-strict}"
+  local mode="${CTI_ENV_ISOLATION:-inherit}"
   if [ "$mode" = "strict" ]; then
     case "$runtime" in
       codex)
@@ -44,21 +54,14 @@ clean_env() {
         done < <(env)
         ;;
       claude)
-        if [ "${CTI_ANTHROPIC_PASSTHROUGH:-}" != "true" ]; then
-          while IFS='=' read -r name _; do
-            case "$name" in ANTHROPIC_*) unset "$name" 2>/dev/null || true ;; esac
-          done < <(env)
-        fi
+        # Keep ANTHROPIC_* (from config.env) — needed for third-party API providers.
+        # Strip OPENAI_* to avoid cross-runtime leakage.
         while IFS='=' read -r name _; do
           case "$name" in OPENAI_*) unset "$name" 2>/dev/null || true ;; esac
         done < <(env)
         ;;
       auto)
-        if [ "${CTI_ANTHROPIC_PASSTHROUGH:-}" != "true" ]; then
-          while IFS='=' read -r name _; do
-            case "$name" in ANTHROPIC_*) unset "$name" 2>/dev/null || true ;; esac
-          done < <(env)
-        fi
+        # Keep both ANTHROPIC_* and OPENAI_* for auto mode
         ;;
     esac
   fi
