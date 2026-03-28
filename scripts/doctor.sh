@@ -3,6 +3,7 @@ set -euo pipefail
 CTI_HOME="${CTI_HOME:-$HOME/.claude-to-im}"
 CONFIG_FILE="$CTI_HOME/config.env"
 PID_FILE="$CTI_HOME/runtime/bridge.pid"
+STATUS_FILE="$CTI_HOME/runtime/status.json"
 LOG_FILE="$CTI_HOME/logs/bridge.log"
 
 PASS=0
@@ -397,11 +398,29 @@ fi
 
 # --- Recent errors in log ---
 if [ -f "$LOG_FILE" ]; then
-  ERROR_COUNT=$(tail -50 "$LOG_FILE" | grep -ciE 'ERROR|Fatal' || true)
-  if [ "$ERROR_COUNT" -eq 0 ]; then
-    check "No recent errors in log (last 50 lines)" 0
+  STARTED_AT=$(sed -n 's/.*"startedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS_FILE" 2>/dev/null | head -1)
+  if [ -n "$STARTED_AT" ]; then
+    ERROR_COUNT=$(awk -v started="$STARTED_AT" '
+      {
+        if ($0 ~ /^\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.+-]+Z\]/) {
+          ts = substr($0, 2, 24)
+          if (ts >= started && $0 ~ /(ERROR|Fatal|FATAL)/) count++
+        }
+      }
+      END { print count + 0 }
+    ' "$LOG_FILE")
+    if [ "$ERROR_COUNT" -eq 0 ]; then
+      check "No errors in current run (since $STARTED_AT)" 0
+    else
+      check "No errors in current run (since $STARTED_AT, found $ERROR_COUNT ERROR/Fatal lines)" 1
+    fi
   else
-    check "No recent errors in log (found $ERROR_COUNT ERROR/Fatal lines)" 1
+    ERROR_COUNT=$(tail -50 "$LOG_FILE" | grep -ciE 'ERROR|Fatal' || true)
+    if [ "$ERROR_COUNT" -eq 0 ]; then
+      check "No recent errors in log (last 50 lines)" 0
+    else
+      check "No recent errors in log (found $ERROR_COUNT ERROR/Fatal lines)" 1
+    fi
   fi
 else
   check "Log file exists (not yet created)" 0
