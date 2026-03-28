@@ -3,17 +3,19 @@ set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DAEMON_SH="$SKILL_DIR/scripts/daemon.sh"
+DOCTOR_SH="$SKILL_DIR/scripts/doctor.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  dual-instance.sh <codex|claude|both> <start|stop|status|logs> [N]
+  dual-instance.sh <codex|claude|both> <start|stop|status|logs|doctor> [N]
 
 Examples:
   dual-instance.sh codex start
   dual-instance.sh claude status
   dual-instance.sh both status
   dual-instance.sh codex logs 100
+  dual-instance.sh both doctor
 EOF
 }
 
@@ -41,6 +43,9 @@ run_instance() {
     logs)
       CTI_HOME="$home_dir" bash "$DAEMON_SH" logs "${extra:-50}"
       ;;
+    doctor)
+      CTI_HOME="$home_dir" bash "$DOCTOR_SH"
+      ;;
     start|stop|status)
       CTI_HOME="$home_dir" bash "$DAEMON_SH" "$action"
       ;;
@@ -49,6 +54,25 @@ run_instance() {
       exit 1
       ;;
   esac
+}
+
+run_both() {
+  local action="$1"
+  local extra="${2:-}"
+  local rc=0
+
+  set +e
+  run_instance codex "$action" "$extra"
+  local rc1=$?
+  echo
+  run_instance claude "$action" "$extra"
+  local rc2=$?
+  set -e
+
+  if [[ "$rc1" -ne 0 || "$rc2" -ne 0 ]]; then
+    rc=1
+  fi
+  return "$rc"
 }
 
 INSTANCE="${1:-}"
@@ -66,15 +90,11 @@ case "$INSTANCE" in
     ;;
   both)
     case "$ACTION" in
-      start|stop|status)
-        run_instance codex "$ACTION"
-        echo
-        run_instance claude "$ACTION"
+      start|stop|status|doctor)
+        run_both "$ACTION"
         ;;
       logs)
-        run_instance codex logs "${EXTRA:-50}"
-        echo
-        run_instance claude logs "${EXTRA:-50}"
+        run_both logs "${EXTRA:-50}"
         ;;
       *)
         echo "Unsupported action for both: $ACTION" >&2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-CTI_HOME="$HOME/.claude-to-im"
+CTI_HOME="${CTI_HOME:-$HOME/.claude-to-im}"
 CONFIG_FILE="$CTI_HOME/config.env"
 PID_FILE="$CTI_HOME/runtime/bridge.pid"
 LOG_FILE="$CTI_HOME/logs/bridge.log"
@@ -33,12 +33,13 @@ else
 fi
 
 # --- Helper: read a value from config.env ---
-get_config() { grep "^$1=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//'; }
+get_config() { grep "^$1=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//' || true; }
 
 # --- Read runtime setting ---
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CTI_RUNTIME=$(get_config CTI_RUNTIME)
 CTI_RUNTIME="${CTI_RUNTIME:-claude}"
+echo "CTI_HOME: $CTI_HOME"
 echo "Runtime: $CTI_RUNTIME"
 echo ""
 
@@ -243,21 +244,20 @@ if [ "$CTI_RUNTIME" = "codex" ] || [ "$CTI_RUNTIME" = "auto" ]; then
   fi
 
   # Check Codex auth: any of CTI_CODEX_API_KEY / CODEX_API_KEY / OPENAI_API_KEY,
-  # or `codex auth status` showing logged-in (interactive login).
+  # or local Codex login credentials under ~/.codex/auth*.
   CODEX_AUTH=1
-  if [ -n "${CTI_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+  CODEX_API_KEY_CFG=$(get_config CTI_CODEX_API_KEY)
+  OPENAI_API_KEY_CFG=$(get_config OPENAI_API_KEY)
+  if [ -n "$CODEX_API_KEY_CFG" ] || [ -n "$OPENAI_API_KEY_CFG" ] || [ -n "${CTI_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
     CODEX_AUTH=0
-  elif command -v codex &>/dev/null; then
-    CODEX_AUTH_OUT=$(codex auth status 2>&1 || true)
-    if echo "$CODEX_AUTH_OUT" | grep -qiE 'logged.in|authenticated'; then
-      CODEX_AUTH=0
-    fi
+  elif find "$HOME/.codex" -maxdepth 1 -type f -name 'auth*' -readable 2>/dev/null | grep -q .; then
+    CODEX_AUTH=0
   fi
   if [ "$CODEX_AUTH" = "0" ]; then
-    check "Codex auth available (API key or login)" 0
+    check "Codex auth available (API key or local login)" 0
   else
     if [ "$CTI_RUNTIME" = "codex" ]; then
-      check "Codex auth available (set OPENAI_API_KEY or run 'codex auth login')" 1
+      check "Codex auth available (set OPENAI_API_KEY or run 'codex login')" 1
     else
       check "Codex auth available (not found — needed only for Codex fallback)" 0
     fi
@@ -286,7 +286,7 @@ fi
 
 # --- config.env permissions ---
 if [ -f "$CONFIG_FILE" ]; then
-  PERMS=$(stat -f "%Lp" "$CONFIG_FILE" 2>/dev/null || stat -c "%a" "$CONFIG_FILE" 2>/dev/null || echo "unknown")
+  PERMS=$(stat -c "%a" "$CONFIG_FILE" 2>/dev/null || stat -f "%Lp" "$CONFIG_FILE" 2>/dev/null || echo "unknown")
   if [ "$PERMS" = "600" ]; then
     check "config.env permissions are 600" 0
   else

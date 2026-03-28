@@ -34,7 +34,7 @@ Claude Code / Codex → reads/writes your codebase
 
 - **Node.js >= 20**
 - **Claude Code CLI** (for `CTI_RUNTIME=claude` or `auto`) — installed and authenticated (`claude` command available)
-- **Codex CLI** (for `CTI_RUNTIME=codex` or `auto`) — `npm install -g @openai/codex`. Auth: run `codex auth login`, or set `OPENAI_API_KEY` (optional, for API mode)
+- **Codex CLI** (for `CTI_RUNTIME=codex` or `auto`) — `npm install -g @openai/codex`. Auth: run `codex login`, or set `OPENAI_API_KEY` (optional, for API mode)
 
 ## Installation
 
@@ -131,6 +131,39 @@ All commands are run inside Claude Code or Codex:
 | `/claude-to-im reconfigure` | "reconfigure" / "修改配置" | Update config interactively |
 | `/claude-to-im doctor` | "doctor" / "诊断" | Diagnose issues |
 
+## Dual-instance setup
+
+If you want to run both:
+
+- `codex -> Feishu bot 1`
+- `claude -> Feishu bot 2`
+
+Use the same source tree with separate `CTI_HOME` directories for config, logs, and runtime state.
+
+This repo includes a wrapper:
+
+```bash
+bash scripts/dual-instance.sh codex start
+bash scripts/dual-instance.sh claude start
+bash scripts/dual-instance.sh both status
+bash scripts/dual-instance.sh both logs 100
+bash scripts/dual-instance.sh both doctor
+```
+
+Default isolated directories:
+
+```bash
+~/.claude-to-im-codex
+~/.claude-to-im-claude
+```
+
+On Linux with systemd, install boot startup with:
+
+```bash
+sudo bash scripts/install-dual-systemd.sh install
+systemctl status claude-to-im-instance@codex.service claude-to-im-instance@claude.service
+```
+
 ## Platform Setup Guides
 
 The `setup` wizard provides inline guidance for every step. Here's a summary:
@@ -219,6 +252,12 @@ Run diagnostics:
 
 ```
 /claude-to-im doctor
+```
+
+For dual-instance setups, you can also run:
+
+```bash
+bash scripts/dual-instance.sh both doctor
 ```
 
 This checks: Node.js version, config file existence and permissions, token validity (live API calls), log directory, PID file consistency, and recent errors.

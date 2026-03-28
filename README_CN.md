@@ -34,7 +34,7 @@ Claude Code / Codex → 读写你的代码库
 
 - **Node.js >= 20**
 - **Claude Code CLI**（`CTI_RUNTIME=claude` 或 `auto` 时需要）— 已安装并完成认证（`claude` 命令可用）
-- **Codex CLI**（`CTI_RUNTIME=codex` 或 `auto` 时需要）— `npm install -g @openai/codex`。鉴权：运行 `codex auth login`，或设置 `OPENAI_API_KEY`（可选，API 模式）
+- **Codex CLI**（`CTI_RUNTIME=codex` 或 `auto` 时需要）— `npm install -g @openai/codex`。鉴权：运行 `codex login`，或设置 `OPENAI_API_KEY`（可选，API 模式）
 
 ## 安装
 
@@ -131,6 +131,39 @@ bash ~/code/Claude-to-IM-skill/scripts/install-codex.sh --link
 | `/claude-to-im reconfigure` | "reconfigure" / "修改配置" | 交互式修改配置 |
 | `/claude-to-im doctor` | "doctor" / "诊断" | 诊断问题 |
 
+## 双实例运行
+
+如果要同时运行：
+
+- `codex -> 飞书机器人 1`
+- `claude -> 飞书机器人 2`
+
+建议复用同一套源码目录，并使用不同的 `CTI_HOME` 目录隔离配置、日志和运行态。
+
+仓库已提供现成封装：
+
+```bash
+bash scripts/dual-instance.sh codex start
+bash scripts/dual-instance.sh claude start
+bash scripts/dual-instance.sh both status
+bash scripts/dual-instance.sh both logs 100
+bash scripts/dual-instance.sh both doctor
+```
+
+默认双实例目录：
+
+```bash
+~/.claude-to-im-codex
+~/.claude-to-im-claude
+```
+
+Linux + systemd 可直接安装双实例开机自启动：
+
+```bash
+sudo bash scripts/install-dual-systemd.sh install
+systemctl status claude-to-im-instance@codex.service claude-to-im-instance@claude.service
+```
+
 ## 平台配置指南
 
 `setup` 向导会在每一步提供内联指引，以下是概要：
@@ -219,6 +252,12 @@ bash ~/code/Claude-to-IM-skill/scripts/install-codex.sh --link
 
 ```
 /claude-to-im doctor
+```
+
+双实例场景也可直接运行：
+
+```bash
+bash scripts/dual-instance.sh both doctor
 ```
 
 检查项目：Node.js 版本、配置文件是否存在及权限、token 有效性（实时 API 调用）、日志目录、PID 文件一致性、最近的错误。
