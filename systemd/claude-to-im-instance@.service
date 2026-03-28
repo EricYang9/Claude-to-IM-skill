@@ -1,0 +1,17 @@
+[Unit]
+Description=Claude-to-IM bridge instance (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+WorkingDirectory=/opt/projects/Claude-to-IM-skill
+ExecStart=/bin/bash /opt/projects/Claude-to-IM-skill/scripts/systemd-instance.sh %i start
+ExecStop=/bin/bash /opt/projects/Claude-to-IM-skill/scripts/systemd-instance.sh %i stop
+TimeoutStartSec=45
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
