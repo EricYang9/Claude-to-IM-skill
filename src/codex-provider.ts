@@ -59,6 +59,11 @@ function shouldEnableCodexNetworkAccess(): boolean {
   return process.env.CTI_CODEX_NETWORK_ACCESS !== 'false';
 }
 
+/** Allow Codex to run outside a trusted Git repository when explicitly enabled. */
+function shouldSkipGitRepoCheck(): boolean {
+  return process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK === 'true';
+}
+
 export class CodexProvider implements LLMProvider {
   private sdk: CodexModule | null = null;
   private codex: CodexInstance | null = null;
@@ -120,9 +125,8 @@ export class CodexProvider implements LLMProvider {
             const { codex } = await self.ensureSDK();
 
             // Resolve or create thread
-            let savedThreadId = params.sdkSessionId
-              ? self.threadIds.get(params.sessionId) || params.sdkSessionId
-              : undefined;
+            const inMemoryThreadId = self.threadIds.get(params.sessionId);
+            let savedThreadId = inMemoryThreadId || params.sdkSessionId || undefined;
 
             const approvalPolicy = toApprovalPolicy(params.permissionMode);
             const passModel = shouldPassModelToCodex();
@@ -130,6 +134,7 @@ export class CodexProvider implements LLMProvider {
             const threadOptions: Record<string, unknown> = {
               ...(passModel && params.model ? { model: params.model } : {}),
               ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
+              ...(shouldSkipGitRepoCheck() ? { skipGitRepoCheck: true } : {}),
               approvalPolicy,
             };
 
